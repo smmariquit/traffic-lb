@@ -18,7 +18,12 @@ export function RouteMap({ corridors, flyTo }: RouteMapProps) {
       </h2>
       <div className="w-full h-[220px] sm:h-[320px] lg:h-[400px] rounded-lg overflow-hidden">
         <Suspense fallback={
-          <div className="w-full h-full flex items-center justify-center text-sm" style={{ backgroundColor: 'var(--color-surface)', color: 'var(--color-text-muted)' }}>
+          <div
+            role="status"
+            aria-live="polite"
+            className="w-full h-full flex items-center justify-center text-sm"
+            style={{ backgroundColor: 'var(--color-surface)', color: 'var(--color-text-muted)' }}
+          >
             Loading map…
           </div>
         }>

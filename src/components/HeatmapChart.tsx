@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { Calendar } from 'lucide-react'
 import { CORRIDORS, type HeatmapBucket } from '../lib/types'
 
@@ -10,7 +10,6 @@ interface HeatmapChartProps {
 
 const DOW_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-// Hour labels: every 2 hours, displayed as 12a, 2a, 4a, ..., 10p
 const HOUR_LABELS = Array.from({ length: 12 }, (_, i) => {
   const hour = i * 2
   if (hour === 0) return '12a'
@@ -18,26 +17,29 @@ const HOUR_LABELS = Array.from({ length: 12 }, (_, i) => {
   return hour < 12 ? `${hour}a` : `${hour - 12}p`
 })
 
-// Type-safe delay field accessor
-function getDelayField(bucket: HeatmapBucket, field: 'p50UsualDelaySeconds' | 'p50FreeFlowDelaySeconds' | 'p90UsualDelaySeconds' | 'p90FreeFlowDelaySeconds' | 'avgUsualDelaySeconds' | 'avgFreeFlowDelaySeconds'): number | null {
+function getDelayField(
+  bucket: HeatmapBucket,
+  field:
+    | 'p50UsualDelaySeconds'
+    | 'p50FreeFlowDelaySeconds'
+    | 'p90UsualDelaySeconds'
+    | 'p90FreeFlowDelaySeconds'
+    | 'avgUsualDelaySeconds'
+    | 'avgFreeFlowDelaySeconds',
+): number | null {
   return bucket[field]
 }
 
-// Display order: Mon(0), Tue(1), ..., Sun(6)
-// SQLite Sun=0, Mon=1, ..., Sat=6
 function displayToSqlDow(displayDow: number): number {
-  return (displayDow + 1) % 7  // Mon(0)→1, ..., Sun(6)→0
+  return (displayDow + 1) % 7
 }
 
-// Continuous color scale: 0s → 300s+ maps to congestion colors
 function delayToColor(p90Seconds: number | null): string {
   if (p90Seconds === null) {
     return 'var(--color-surface-subtle)'
   }
-  // Normalize 0-300s to 0-1 range
   const normalized = Math.min(p90Seconds / 300, 1)
 
-  // Color stops: 0=light, 0.25=moderate, 0.5=heavy, 0.75+=severe
   if (normalized < 0.25) {
     const t = normalized / 0.25
     return `color-mix(in srgb, var(--color-congestion-light) ${(1 - t) * 100}%, var(--color-congestion-moderate) ${t * 100}%)`
@@ -52,18 +54,41 @@ function delayToColor(p90Seconds: number | null): string {
   }
 }
 
+function cellDescription(
+  dowLabel: string,
+  hr: number,
+  bucket: HeatmapBucket | undefined,
+  p50Field: 'p50FreeFlowDelaySeconds',
+  p90Field: 'p90FreeFlowDelaySeconds',
+): string {
+  if (!bucket) return `${dowLabel} ${hr}:00 · No data`
+  const p50 = getDelayField(bucket, p50Field)
+  const p90 = getDelayField(bucket, p90Field)
+  const p50Min = p50 !== null ? Math.round(p50 / 60) : 'N/A'
+  const p90Min = p90 !== null ? Math.round(p90 / 60) : 'N/A'
+  const incidentText =
+    bucket.incidentCount > 0
+      ? ` · ${bucket.incidentCount} incident${bucket.incidentCount > 1 ? 's' : ''}`
+      : ''
+  return `${dowLabel} ${hr}:00 · P50 +${p50Min} min · P90 +${p90Min} min · ${bucket.sampleCount} sample${bucket.sampleCount !== 1 ? 's' : ''}${incidentText}`
+}
+
 export function HeatmapChart({ data, expanded, onToggle }: HeatmapChartProps) {
+  const panelId = useId()
+  const tabPanelId = useId()
+  const cellDescId = useId()
   const [selectedCorridor, setSelectedCorridor] = useState(CORRIDORS[0].id)
   const [selectedDirection, setSelectedDirection] = useState<'f' | 'r'>('f')
   const [hoveredCell, setHoveredCell] = useState<{ dow: number; hr: number } | null>(null)
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [activeDesc, setActiveDesc] = useState('')
 
   const p50Field = 'p50FreeFlowDelaySeconds' as const
   const p90Field = 'p90FreeFlowDelaySeconds' as const
 
   const dirKey = `${selectedCorridor}_${selectedDirection}`
+  const hasAnyData = data.length > 0
 
-  // Group buckets by corridor-direction for lookup
   const bucketsByDirection = useMemo(() => {
     const map = new Map<string, Map<string, HeatmapBucket>>()
     for (const bucket of data) {
@@ -76,18 +101,16 @@ export function HeatmapChart({ data, expanded, onToggle }: HeatmapChartProps) {
     return map
   }, [data])
 
-  // Get buckets for selected direction
   const selectedBuckets = bucketsByDirection.get(dirKey)
+  const selectionEmpty = selectedBuckets === undefined || selectedBuckets.size === 0
   const totalCells = 7 * 24
   const filledCells = selectedBuckets?.size ?? 0
   const reliability = Math.round((filledCells / totalCells) * 100)
 
-  // Current hour-of-week in Manila time (UTC+8)
   const currentBucket = useMemo(() => {
     const now = new Date()
     const utcHour = now.getUTCHours()
     const utcDow = now.getUTCDay()
-    // Convert to Manila time (UTC+8)
     const manilaHour = (utcHour + 8) % 24
     const manilaDow = (utcDow + Math.floor((utcHour + 8) / 24) + 7) % 7
     const key = `${manilaDow}-${manilaHour}`
@@ -96,7 +119,6 @@ export function HeatmapChart({ data, expanded, onToggle }: HeatmapChartProps) {
 
   const selectedCorridorDef = CORRIDORS.find(c => c.id === selectedCorridor)!
 
-  // Build grid data in display order (Mon-Sun)
   const gridData = useMemo(() => {
     const cells: Array<{
       dow: number
@@ -114,14 +136,35 @@ export function HeatmapChart({ data, expanded, onToggle }: HeatmapChartProps) {
     return cells
   }, [selectedBuckets])
 
+  const activateCell = (
+    displayDow: number,
+    hr: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    setHoveredCell({ dow: displayDow, hr })
+    setTooltipPos({ x: clientX, y: clientY })
+    const sqlDow = displayToSqlDow(displayDow)
+    const bucket = selectedBuckets?.get(`${sqlDow}-${hr}`)
+    setActiveDesc(
+      cellDescription(DOW_LABELS[displayDow], hr, bucket, p50Field, p90Field),
+    )
+  }
+
+  const clearCell = () => {
+    setHoveredCell(null)
+    setActiveDesc('')
+  }
+
   return (
     <div className="card p-0 overflow-hidden">
-      {/* Collapsible header */}
       <button
+        type="button"
         onClick={onToggle}
         className="w-full flex items-center justify-between px-4 py-3 text-left focus-visible:outline focus-visible:outline-offset-2 border-b"
         style={{ outlineColor: 'var(--color-focus)', borderColor: 'var(--color-border)' }}
         aria-expanded={expanded}
+        aria-controls={panelId}
       >
         <div className="flex items-center gap-1.5">
           <Calendar size={13} aria-hidden="true" style={{ color: 'var(--color-text-muted)' }} />
@@ -135,210 +178,242 @@ export function HeatmapChart({ data, expanded, onToggle }: HeatmapChartProps) {
       </button>
 
       {expanded && (
-        <div className="p-4 sm:p-5 pt-4">
-          {/* Description */}
+        <div id={panelId} className="p-4 sm:p-5 pt-4">
           <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
-            Typical delay by day and time (90th percentile)
+            Typical delay by day and time (90th percentile). Color scale: Fast to Slow.
           </p>
 
-          {/* Controls */}
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
-        {/* Corridor tabs */}
-        <div className="flex flex-wrap gap-1" role="tablist" aria-label="Corridors">
-          {CORRIDORS.map(c => (
-            <button
-              key={c.id}
-              role="tab"
-              aria-selected={selectedCorridor === c.id}
-              onClick={() => setSelectedCorridor(c.id)}
-              className="min-h-8 px-3 text-xs font-medium rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-all"
-              style={{
-                color: selectedCorridor === c.id ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
-                backgroundColor: selectedCorridor === c.id ? 'var(--color-surface-overlay)' : 'transparent',
-                '--tw-ring-color': 'var(--color-focus)',
-                '--tw-ring-offset-color': 'var(--color-surface-raised)',
-              } as React.CSSProperties}
-            >
-              {c.tabLabel}
-            </button>
-          ))}
-        </div>
+            <div className="flex flex-wrap gap-1" role="tablist" aria-label="Corridors">
+              {CORRIDORS.map(c => (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="tab"
+                  id={`${tabPanelId}-tab-${c.id}`}
+                  aria-selected={selectedCorridor === c.id}
+                  aria-controls={tabPanelId}
+                  disabled={!hasAnyData}
+                  onClick={() => setSelectedCorridor(c.id)}
+                  className="min-h-8 px-3 text-xs font-medium rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-all disabled:cursor-not-allowed disabled:opacity-55"
+                  style={{
+                    color: selectedCorridor === c.id ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                    backgroundColor: selectedCorridor === c.id ? 'var(--color-surface-overlay)' : 'transparent',
+                    '--tw-ring-color': 'var(--color-focus)',
+                    '--tw-ring-offset-color': 'var(--color-surface-raised)',
+                  } as React.CSSProperties}
+                >
+                  {c.tabLabel}
+                </button>
+              ))}
+            </div>
 
-        {/* Direction toggle */}
-        <div className="flex rounded-md p-0.5" style={{ backgroundColor: 'var(--color-surface-overlay)', border: '1px solid var(--color-border)' }}>
-          {(['f', 'r'] as const).map(dir => (
-            <button
-              key={dir}
-              onClick={() => setSelectedDirection(dir)}
-              className="min-h-7 px-3 text-xs font-medium rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-all"
+            <div
+              className="flex rounded-md p-0.5"
               style={{
-                color: selectedDirection === dir ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
-                backgroundColor: selectedDirection === dir ? 'var(--color-surface-raised)' : 'transparent',
-                '--tw-ring-color': 'var(--color-focus)',
-                '--tw-ring-offset-color': 'var(--color-surface-raised)',
-              } as React.CSSProperties}
-              aria-pressed={selectedDirection === dir}
+                backgroundColor: 'var(--color-surface-overlay)',
+                border: '1px solid var(--color-border)',
+                opacity: hasAnyData ? 1 : 0.55,
+              }}
+              role="group"
+              aria-label="Direction"
             >
-              {dir === 'f' ? selectedCorridorDef.forwardLabel : selectedCorridorDef.reverseLabel}
-            </button>
-          ))}
-        </div>
-      </div>
+              {(['f', 'r'] as const).map(dir => (
+                <button
+                  key={dir}
+                  type="button"
+                  onClick={() => setSelectedDirection(dir)}
+                  disabled={!hasAnyData}
+                  className="min-h-7 px-3 text-xs font-medium rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-all disabled:cursor-not-allowed"
+                  style={{
+                    color: selectedDirection === dir ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                    backgroundColor: selectedDirection === dir ? 'var(--color-surface-raised)' : 'transparent',
+                    '--tw-ring-color': 'var(--color-focus)',
+                    '--tw-ring-offset-color': 'var(--color-surface-raised)',
+                  } as React.CSSProperties}
+                  aria-pressed={selectedDirection === dir}
+                >
+                  {dir === 'f' ? selectedCorridorDef.forwardLabel : selectedCorridorDef.reverseLabel}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {/* Empty state */}
-      {selectedBuckets === undefined || selectedBuckets.size === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            No data available for this corridor
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {/* Reliability summary for current hour */}
-          {currentBucket && (
-            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
-              <span>Right now:</span>
-              <span style={{ color: 'var(--color-text-primary)' }}>
-                Typical: +{Math.round((getDelayField(currentBucket, p50Field) ?? 0) / 60)} min | Plan for: +{Math.round((getDelayField(currentBucket, p90Field) ?? 0) / 60)} min
-              </span>
-              <span aria-hidden="true">·</span>
-              <span>based on {currentBucket.sampleCount} samples</span>
+          <div
+            id={tabPanelId}
+            role="tabpanel"
+            aria-labelledby={`${tabPanelId}-tab-${selectedCorridor}`}
+          >
+            {selectionEmpty ? (
+              <div className="text-center py-12" role="status">
+                <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  No pattern data for this corridor and direction yet. Pick another corridor or check back after more samples.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {currentBucket && (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
+                    <span>Right now:</span>
+                    <span style={{ color: 'var(--color-text-primary)' }}>
+                      Typical: +{Math.round((getDelayField(currentBucket, p50Field) ?? 0) / 60)} min | Plan for: +{Math.round((getDelayField(currentBucket, p90Field) ?? 0) / 60)} min
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>based on {currentBucket.sampleCount} samples</span>
+                  </div>
+                )}
+
+                <p id={cellDescId} className="sr-only" aria-live="polite">
+                  {activeDesc}
+                </p>
+
+                <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
+                  <div
+                    role="grid"
+                    aria-label={`Weekly delay pattern for ${selectedCorridorDef.label}, ${selectedDirection === 'f' ? selectedCorridorDef.forwardLabel : selectedCorridorDef.reverseLabel}`}
+                    aria-describedby={cellDescId}
+                    className="grid gap-0.5 min-w-max"
+                    style={{
+                      gridTemplateColumns: '3rem repeat(24, minmax(14px, 1fr))',
+                      gridTemplateRows: 'auto repeat(7, minmax(28px, 1fr))',
+                    }}
+                  >
+                    <div className="col-start-1 row-start-1" role="presentation" />
+
+                    {HOUR_LABELS.map((label) => (
+                      <div
+                        key={label}
+                        role="columnheader"
+                        className="col-span-2 text-[10px] text-center flex items-center justify-center"
+                        style={{ color: 'var(--color-text-muted)' }}
+                      >
+                        {label}
+                      </div>
+                    ))}
+
+                    {DOW_LABELS.map((dowLabel, displayDow) => (
+                      <div key={dowLabel} className="contents" role="row">
+                        <div
+                          role="rowheader"
+                          className="text-[10px] text-right pr-2 flex items-center justify-end"
+                          style={{ color: 'var(--color-text-muted)' }}
+                        >
+                          {dowLabel}
+                        </div>
+
+                        {Array.from({ length: 24 }, (_, hr) => {
+                          const cell = gridData.find(c => c.dow === displayDow && c.hr === hr)
+                          const bucket = cell?.bucket
+                          const delaySec = bucket ? getDelayField(bucket, p90Field) : null
+                          const isEmpty = delaySec === null
+                          const incidentCount = bucket?.incidentCount ?? 0
+                          const label = isEmpty
+                            ? `${dowLabel} ${hr}:00, no data`
+                            : `${dowLabel} ${hr}:00, +${Math.round((delaySec ?? 0) / 60)} min delay${
+                                incidentCount > 0
+                                  ? `, ${incidentCount} incident${incidentCount > 1 ? 's' : ''}`
+                                  : ''
+                              }`
+
+                          return (
+                            <div
+                              key={`${displayDow}-${hr}`}
+                              className="rounded-sm cursor-crosshair transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 relative"
+                              style={{
+                                backgroundColor: delayToColor(delaySec),
+                                outlineColor: 'var(--color-focus)',
+                              }}
+                              onMouseEnter={(e) =>
+                                activateCell(displayDow, hr, e.clientX, e.clientY)
+                              }
+                              onMouseLeave={clearCell}
+                              onFocus={(e) => {
+                                const r = e.currentTarget.getBoundingClientRect()
+                                activateCell(displayDow, hr, r.right, r.top)
+                              }}
+                              onBlur={clearCell}
+                              tabIndex={0}
+                              role="gridcell"
+                              aria-label={label}
+                            >
+                              {incidentCount > 0 && (
+                                <div
+                                  className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full"
+                                  style={{ backgroundColor: 'var(--color-text-muted)', opacity: 0.5 }}
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div
+                  className="flex items-center justify-between text-xs"
+                  style={{ color: 'var(--color-text-muted)' }}
+                  aria-label="Delay color legend from fast to slow"
+                >
+                  <span>Fast</span>
+                  <div className="flex gap-0.5" aria-hidden="true">
+                    {[0, 1, 2, 3, 4].map((value) => (
+                      <div
+                        key={value}
+                        className="w-6 h-4 rounded-sm"
+                        style={{ backgroundColor: delayToColor(value * 75) }}
+                      />
+                    ))}
+                  </div>
+                  <span>Slow</span>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                  <span>{reliability}% data coverage</span>
+                  <span aria-hidden="true">·</span>
+                  <span>Last 14 days</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {hoveredCell && selectedBuckets && (
+            <div
+              className="fixed z-50 px-2 py-1.5 rounded text-xs pointer-events-none shadow-lg"
+              style={{
+                backgroundColor: 'var(--color-surface-raised)',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-primary)',
+                left: tooltipPos.x + 12,
+                top: tooltipPos.y - 8,
+              }}
+              aria-hidden="true"
+            >
+              {(() => {
+                const displayDow = hoveredCell.dow
+                const hr = hoveredCell.hr
+                const sqlDow = displayToSqlDow(displayDow)
+                const key = `${sqlDow}-${hr}`
+                const bucket = selectedBuckets.get(key)
+                if (!bucket) return `${DOW_LABELS[displayDow]} ${hr}:00 · No data`
+
+                const p50Min = getDelayField(bucket, p50Field) !== null ? Math.round(getDelayField(bucket, p50Field)! / 60) : 'N/A'
+                const p90Min = getDelayField(bucket, p90Field) !== null ? Math.round(getDelayField(bucket, p90Field)! / 60) : 'N/A'
+                const incidentText = bucket.incidentCount > 0
+                  ? ` · ${bucket.incidentCount} incident${bucket.incidentCount > 1 ? 's' : ''}`
+                  : ''
+
+                return (
+                  <>
+                    <div style={{ fontWeight: 600 }}>{DOW_LABELS[displayDow]} {hr}:00</div>
+                    <div>P50: +{p50Min} min | P90: +{p90Min} min</div>
+                    <div>{bucket.sampleCount} sample{bucket.sampleCount !== 1 ? 's' : ''}{incidentText}</div>
+                  </>
+                )
+              })()}
             </div>
           )}
-
-          {/* Heatmap grid */}
-          <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
-            <div
-              className="grid gap-0.5 min-w-max"
-              style={{
-                gridTemplateColumns: '3rem repeat(24, minmax(14px, 1fr))',
-                gridTemplateRows: 'auto repeat(7, minmax(28px, 1fr))',
-              }}
-            >
-              {/* Corner cell */}
-              <div className="col-start-1 row-start-1" />
-
-              {/* Hour labels (every 2 hours) */}
-              {HOUR_LABELS.map((label) => (
-                <div
-                  key={label}
-                  className="col-span-2 text-[10px] text-center flex items-center justify-center"
-                  style={{ color: 'var(--color-text-muted)' }}
-                >
-                  {label}
-                </div>
-              ))}
-
-              {/* Day labels + cells */}
-              {DOW_LABELS.map((dowLabel, displayDow) => (
-                <div key={dowLabel} className="contents">
-                  {/* Day label */}
-                  <div
-                    className="text-[10px] text-right pr-2 flex items-center justify-end"
-                    style={{ color: 'var(--color-text-muted)' }}
-                  >
-                    {dowLabel}
-                  </div>
-
-                  {/* 24 hour cells for this day */}
-                  {Array.from({ length: 24 }, (_, hr) => {
-                    const cell = gridData.find(c => c.dow === displayDow && c.hr === hr)
-                    const bucket = cell?.bucket
-                    const delaySec = bucket ? getDelayField(bucket, p90Field) : null
-                    const isEmpty = delaySec === null
-                    const incidentCount = bucket?.incidentCount ?? 0
-
-                    return (
-                      <div
-                        key={`${displayDow}-${hr}`}
-                        className="rounded-sm cursor-crosshair transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 relative"
-                        style={{
-                          backgroundColor: delayToColor(delaySec),
-                          outlineColor: 'var(--color-focus)',
-                        }}
-                        onMouseEnter={(e) => { setHoveredCell({ dow: displayDow, hr }); setTooltipPos({ x: e.clientX, y: e.clientY }) }}
-                        onMouseLeave={() => setHoveredCell(null)}
-                        onFocus={(e) => { setHoveredCell({ dow: displayDow, hr }); const r = e.currentTarget.getBoundingClientRect(); setTooltipPos({ x: r.right, y: r.top }) }}
-                        onBlur={() => setHoveredCell(null)}
-                        tabIndex={0}
-                        role="gridcell"
-                        aria-label={`${dowLabel} ${hr}:00, ${isEmpty ? 'no data' : `+${Math.round((delaySec ?? 0) / 60)} min delay`}`}
-                      >
-                        {/* Incident indicator dot */}
-                        {incidentCount > 0 && (
-                          <div
-                            className="absolute top-0.5 right-0.5 w-1 h-1 rounded-full"
-                            style={{ backgroundColor: 'var(--color-text-muted)', opacity: 0.5 }}
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Legend */}
-          <div className="flex items-center justify-between text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            <span>Fast</span>
-            <div className="flex gap-0.5">
-              {[0, 1, 2, 3, 4].map((value) => (
-                <div
-                  key={value}
-                  className="w-6 h-4 rounded-sm"
-                  style={{ backgroundColor: delayToColor(value * 75) }}
-                />
-              ))}
-            </div>
-            <span>Slow</span>
-          </div>
-
-          {/* Data coverage */}
-          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            <span>{reliability}% data coverage</span>
-            <span aria-hidden="true">·</span>
-            <span>Last 14 days</span>
-          </div>
-        </div>
-      )}
-
-      {/* Tooltip */}
-      {hoveredCell && selectedBuckets && (
-        <div
-          className="fixed z-50 px-2 py-1.5 rounded text-xs pointer-events-none shadow-lg"
-          style={{
-            backgroundColor: 'var(--color-surface-raised)',
-            border: '1px solid var(--color-border)',
-            color: 'var(--color-text-primary)',
-            left: tooltipPos.x + 12,
-            top: tooltipPos.y - 8,
-          }}
-        >
-          {(() => {
-            const displayDow = hoveredCell.dow
-            const hr = hoveredCell.hr
-            const sqlDow = displayToSqlDow(displayDow)
-            const key = `${sqlDow}-${hr}`
-            const bucket = selectedBuckets.get(key)
-            if (!bucket) return `${DOW_LABELS[displayDow]} ${hr}:00 · No data`
-
-            const p50Min = getDelayField(bucket, p50Field) !== null ? Math.round(getDelayField(bucket, p50Field)! / 60) : 'N/A'
-            const p90Min = getDelayField(bucket, p90Field) !== null ? Math.round(getDelayField(bucket, p90Field)! / 60) : 'N/A'
-            const incidentText = bucket.incidentCount > 0
-              ? ` · ${bucket.incidentCount} incident${bucket.incidentCount > 1 ? 's' : ''}`
-              : ''
-
-            return (
-              <>
-                <div style={{ fontWeight: 600 }}>{DOW_LABELS[displayDow]} {hr}:00</div>
-                <div>P50: +{p50Min} min | P90: +{p90Min} min</div>
-                <div>{bucket.sampleCount} sample{bucket.sampleCount !== 1 ? 's' : ''}{incidentText}</div>
-              </>
-            )
-          })()}
-        </div>
-      )}
         </div>
       )}
     </div>

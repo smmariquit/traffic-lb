@@ -288,5 +288,13 @@ export default function LeafletMap({ corridors, flyTo: flyTarget }: LeafletMapPr
     mapRef.current.flyTo({ center: [flyTarget.lng, flyTarget.lat], zoom: 16 })
   }, [flyTarget])
 
-  return <div ref={mapContainer} className="w-full h-full" role="application" aria-label="Interactive traffic route map" style={{ height: '100%', width: '100%' }} />
+  return (
+    <div
+      ref={mapContainer}
+      className="w-full h-full"
+      role="application"
+      aria-label="Los Baños traffic route map. Use two-finger scroll or map controls to pan and zoom. Corridor colors show congestion: green light, yellow moderate, orange heavy, red severe."
+      style={{ height: '100%', width: '100%' }}
+    />
+  )
 }

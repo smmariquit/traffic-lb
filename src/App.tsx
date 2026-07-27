@@ -57,7 +57,15 @@ function corridorLabel(directionKey: string): string {
   return ''
 }
 
-function PageToggle({ page, setPage }: { page: 'live' | 'analytics'; setPage: (p: 'live' | 'analytics') => void }) {
+function PageToggle({
+  page,
+  setPage,
+  disabled = false,
+}: {
+  page: 'live' | 'analytics'
+  setPage: (p: 'live' | 'analytics') => void
+  disabled?: boolean
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const liveRef = useRef<HTMLButtonElement>(null)
   const analyticsRef = useRef<HTMLButtonElement>(null)
@@ -78,7 +86,12 @@ function PageToggle({ page, setPage }: { page: 'live' | 'analytics'; setPage: (p
     <div
       ref={containerRef}
       className="relative flex rounded-md border p-0.5"
-      style={{ backgroundColor: 'var(--color-surface-overlay)', borderColor: 'var(--color-border)' }}
+      style={{
+        backgroundColor: 'var(--color-surface-overlay)',
+        borderColor: 'var(--color-border)',
+        opacity: disabled ? 0.4 : 1,
+      }}
+      aria-disabled={disabled || undefined}
     >
       <div
         className="absolute top-0.5 bottom-0.5 rounded-[4px] transition-[left,width] duration-200 ease-out"
@@ -93,7 +106,8 @@ function PageToggle({ page, setPage }: { page: 'live' | 'analytics'; setPage: (p
         ref={liveRef}
         type="button"
         onClick={() => setPage('live')}
-        className="relative z-10 h-7 px-2.5 text-xs font-medium rounded-[4px] flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-colors duration-150"
+        disabled={disabled}
+        className="relative z-10 h-7 px-2.5 text-xs font-medium rounded-[4px] flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-colors duration-150 disabled:cursor-not-allowed"
         style={{
           color: page === 'live' ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
           '--tw-ring-color': 'var(--color-focus)',
@@ -108,7 +122,8 @@ function PageToggle({ page, setPage }: { page: 'live' | 'analytics'; setPage: (p
         ref={analyticsRef}
         type="button"
         onClick={() => setPage('analytics')}
-        className="relative z-10 h-7 px-2.5 text-xs font-medium rounded-[4px] flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-colors duration-150"
+        disabled={disabled}
+        className="relative z-10 h-7 px-2.5 text-xs font-medium rounded-[4px] flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-colors duration-150 disabled:cursor-not-allowed"
         style={{
           color: page === 'analytics' ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
           '--tw-ring-color': 'var(--color-focus)',
@@ -148,8 +163,13 @@ export default function App() {
 
   const isNoData = data?.status === 'no_data'
   const hasData = data?.status === 'ok' && Object.keys(corridors).length > 0
+  const controlsDisabled = !hasData && !loading
   const isStale = hasData && Object.values(corridors).some((d: CorridorDirection) => d.isStale)
-  const summary = hasData ? heroSummary(corridors) : ''
+  const summary = hasData
+    ? heroSummary(corridors)
+    : isNoData
+      ? 'Waiting for the first traffic sample'
+      : ''
 
   return (
     <div className="min-h-screen textured" style={{ backgroundColor: 'var(--color-surface)' }}>
@@ -160,14 +180,13 @@ export default function App() {
             <span>Traffic Ba Sa LB?</span>
           </span>
           <div className="flex items-center gap-1.5">
-            {/* Page slider pill */}
-            <PageToggle page={page} setPage={setPage} />
+            <PageToggle page={page} setPage={setPage} disabled={controlsDisabled} />
 
-            {/* Detail toggle */}
             <button
               type="button"
               onClick={() => setDetailMode(!detailMode)}
-              className="h-8 w-8 rounded-md border flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-colors duration-150"
+              disabled={controlsDisabled}
+              className="h-8 w-8 rounded-md border flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40"
               style={{
                 backgroundColor: detailMode ? 'var(--color-surface-raised)' : 'var(--color-surface-overlay)',
                 borderColor: 'var(--color-border)',
@@ -176,8 +195,14 @@ export default function App() {
                 '--tw-ring-offset-color': 'var(--color-surface)',
               } as React.CSSProperties}
               aria-pressed={detailMode}
-              aria-label={detailMode ? 'Switch to simple view' : 'Switch to detailed view'}
-              title={detailMode ? 'Simple view' : 'Detailed view'}
+              aria-label={
+                controlsDisabled
+                  ? 'Detail view unavailable until traffic data loads'
+                  : detailMode
+                    ? 'Switch to simple view'
+                    : 'Switch to detailed view'
+              }
+              title={controlsDisabled ? 'Unavailable without data' : detailMode ? 'Simple view' : 'Detailed view'}
             >
               {detailMode
                 ? <LayoutGrid size={14} aria-hidden="true" />
@@ -217,14 +242,30 @@ export default function App() {
         )}
 
         {isNoData && !loading && (
-          <div className="text-center py-16">
+          <div className="text-center py-16" role="status">
             <div className="text-4xl mb-4" role="img" aria-label="Construction sign">🚧</div>
             <h2 className="text-lg font-semibold mb-2" style={{ color: 'var(--color-text-secondary)' }}>
-              No data yet
+              No live traffic yet
             </h2>
-            <p className="text-sm max-w-xs mx-auto" style={{ color: 'var(--color-text-muted)' }}>
-              Traffic data collection hasn't started yet. Check back in a few minutes.
+            <p className="text-sm max-w-sm mx-auto mb-4" style={{ color: 'var(--color-text-muted)' }}>
+              The collector has not written a sample. Live and Analytics stay off until the first successful pull.
             </p>
+            <button
+              type="button"
+              onClick={() => load(trendRange, true)}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 min-h-9 px-3 rounded-md text-sm font-medium border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:opacity-70"
+              style={{
+                backgroundColor: 'var(--color-surface-raised)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text-primary)',
+                '--tw-ring-color': 'var(--color-focus)',
+                '--tw-ring-offset-color': 'var(--color-surface)',
+              } as React.CSSProperties}
+            >
+              <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
+              Check again
+            </button>
           </div>
         )}
 
